@@ -1,0 +1,193 @@
+---
+title: "limma_analysis"
+author: "Hsiao-Yu Peng"
+date: "2025-02-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#BiocManager::install("limma")
+library(limma)
+```
+
+```{r}
+# load RMA data
+expr_data <- read.table("GSE7621_RMA_normalized.txt", header=TRUE, row.names=1, sep="\t")
+
+head(expr_data)
+```
+
+
+
+```{r}
+# Read metadata to ensure all row.names are correct
+metadata <- read.table("GSE7621_metadata.txt", header=TRUE, sep="\t", row.names=1)
+
+# Ensure metadata sample_id is the same as expr_data
+metadata <- metadata[colnames(expr_data), ,drop=FALSE]
+
+# label as "factor"
+metadata$label <- as.factor(metadata$label)
+
+# Design matrix
+design <- model.matrix(~ 0 + metadata$label) 
+colnames(design) <- levels(metadata$label)
+
+print(design)
+```
+
+```{r}
+# Use limma to analyze DEA
+fit <- lmFit(expr_data, design)
+contrast_matrix <- makeContrasts(PD - Normal, levels = design)
+fit2 <- contrasts.fit(fit, contrast_matrix)
+fit2 <- eBayes(fit2)
+
+# Get the results
+result <- topTable(fit2, adjust="fdr", number = Inf)
+
+# Save the result
+write.csv(result, file="limma_DEGs_results.csv")
+
+# Show result
+head(result)
+
+```
+
+1. LogFC（Log Fold Change): 
+- logFC > 1 (upregulated): Higher expression in PD patients
+- logFC < 1 (downregulated): Lower expression in PD patient
+
+2. P.value: original statistical p-value
+
+3. adj.P.Val (adjusted p-value by FDR): Select significant expressed genes, use `adj.P.Val < 0.05`
+
+4. B: B value, the higher, the more confident.
+
+```{r}
+# Select significant expressed genes （FDR < 0.05, LogFC > |1|）
+DEGs <- result[result$adj.P.Val < 0.05 & abs(result$logFC) > 1, ]
+write.csv(DEGs, file = "significant_DEGs.csv")
+
+head(DEGs)
+
+```
+
+## Visualization
+### Volcano Plot
+
+```{r}
+library(ggplot2)
+
+result$threshold <- as.factor(result$adj.P.Val < 0.05  & abs(result$logFC) > 1)
+ggplot(result, aes(x=logFC, y=-log10(P.Value), color=threshold)) +
+  geom_point(alpha=0.5) +
+  theme_minimal() +
+  labs(title = "Volcano Plot", x="log 2 Fold Change", y="-log10 P Value")
+
+
+```
+
+
+## Enrichment Analysis
+
+The names in the "Gene" column are in formats like `204457_s_at` or `227321_at`, which indicates that the gene identifiers are **not Gene Symbols** but **Affymetrix Probe IDs**.
+
+
+**1. Why can't `bitr()` convert these IDs?**
+
+Because `bitr()` requires **standard Gene Symbols** (e.g., `SNCA`, `MAPT`, `LRRK2`), but the format provided **Affymetrix Probe IDs** (e.g., `204457_s_at`).  
+These Probe IDs need to be converted into Gene Symbols first before they can be mapped to Entrez IDs.
+
+**2. Convert Probe IDs to Gene Symbols**
+
+In R, we can use `AnnotationDbi` along with the `hgu133plus2.db` package to convert **Affymetrix Probe IDs → Gene Symbols**.  
+
+```{r}
+#BiocManager::install(c("clusterProfiler", "org.Hs.eg.db", "ReactomePA", "DOSE"))
+#BiocManager::install("hgu133plus2.db")
+
+library(hgu133plus2.db)
+library(clusterProfiler)
+library(org.Hs.eg.db) # human gene annotation
+library(ReactomePA) # Reactome Pathway analysis
+library(DOSE) # Disease Enrichment Analysis
+```
+
+### Covert Gene Format
+
+Many pathway analysis needs **Entrez ID**, not Gene Symbol.
+
+```{r}
+DEGs <- read.csv("significant_DEGs.csv", row.names = 1)
+
+# Obtain Probe_ID list -> Gene column
+DEGs$Gene <- rownames(DEGs)
+rownames(DEGs) <- NULL # clear out row names to avoid affecting the following analysis
+
+# Convert Probe ID to Gene Symbol
+gene_symbols <- mapIds(hgu133plus2.db, keys=DEGs$Gene, column="SYMBOL", keytype="PROBEID", multiVals="first")
+
+# Add Gene Symbol to DEGs
+DEGs$GeneSymbol <- gene_symbols
+
+# Remove no those rows without corresponding Gene Symbol (avoid errors later)
+DEGs_clean <- na.omit(DEGs)
+
+#write.csv(DEGs_clean, file="significant_DEGs_clean_results.csv")
+```
+
+
+### Covert Gene Sumbol into Entrez ID
+
+```{r}
+gene_list <- bitr(DEGs_clean$GeneSymbol, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+head(gene_list)
+
+```
+
+
+# 4.1 GO Enrichment Analysis
+
+```{r}
+go_results <- enrichGO(gene = gene_list$ENTREZID, OrgDb = org.Hs.eg.db, keyType = "ENTREZID",
+                       ont = "BP", pAdjustMethod = "fdr", readable = TRUE)
+
+# Create GO enrichment results
+barplot(go_results, showCategory=10)
+dotplot(go_results, showCategory=10)
+
+```
+
+
+4.2 KEGG Pathway Enrichment Analysis
+
+```{r}
+kegg_results <- enrichKEGG(gene = gene_list$ENTREZID, organism = 'hsa')
+
+# Create KEGG Pathway
+barplot(kegg_results, showCategory=10)
+dotplot(kegg_results, showCategory=10)
+```
+
+
+# 4.3 Reactome Pathway Analysis
+
+Reactome is a more detail Pathway Database than KEGG, good for exploring detailed molecular mechanism.
+
+```{r}
+reactome_results <- enrichPathway(gene = gene_list$ENTREZID, organism = "human")
+
+# Create Reactome Pathway
+barplot(reactome_results, showCategory=10)
+dotplot(reactome_results, showCategory=10)
+```
+
+From GO, KEGG, and Reactome enrichment analyses, we identified several pathways significantly associated with PD, including neurotransmitter-related pathways (e.g., dopamine synapse) and synaptic vesicle processes. These findings are consistent with the known pathophysiology of Parkinson's disease.
+
+

@@ -1,0 +1,37 @@
+---
+title: "convert_to_matrix"
+author: "Hsiao-Yu Peng"
+date: "2025-02-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#BiocManager::install("affy")
+library(affy)
+
+```
+
+```{r}
+data <- ReadAffy(celfile.path = "GSE7621_RAW")
+
+# RMA normalization
+eset <- rma(data)
+
+# Convert into dataframe
+exprs_data <- exprs(eset)
+
+# Remove `.CEL.gz`
+sample_names <- colnames(exprs_data)
+sample_names <- gsub(".CEL.gz", "", sample_names)
+
+# Set new column names
+colnames(exprs_data) <- sample_names
+
+# Save as a file. 
+write.table(exprs_data, "GSE7621_RMA_normalized.txt", sep = '\t', quote = FALSE)
+
+```
