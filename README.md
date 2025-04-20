@@ -17,6 +17,8 @@ This project demonstrates how to identify **differentially expressed genes (DEGs
 2. **Differential Expression Analysis**  
    - Applied `limma` to identify DEGs between PD and normal groups
    - Used log fold change and adjusted p-values to filter significant genes
+   - Visualization: pheatmap, volcano plot
+   - Enrichment Analysis: GO Enrichment, KEGG Pathway Analysis, Reactome Pathway Analysis
 
 3. **Feature Selection & Modeling**  
    - Selected DEGs as features for ML models
